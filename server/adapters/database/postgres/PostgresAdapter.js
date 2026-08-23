@@ -524,6 +524,22 @@ class PostgresAdapter extends DatabaseAdapter {
 		return normalizeUserRow(rows[0]);
 	}
 
+	_setCachedUser(user, now = Date.now()) {
+		if (!user) return;
+		if (!this._userCache) this._userCache = new Map();
+		if (this._userCache.size >= 2000) {
+			for (const [key, entry] of this._userCache) {
+				if (!entry || entry.expiresAt <= now) this._userCache.delete(key);
+			}
+			while (this._userCache.size >= 2000) {
+				const oldestKey = this._userCache.keys().next().value;
+				if (oldestKey === undefined) break;
+				this._userCache.delete(oldestKey);
+			}
+		}
+		this._userCache.set(user.id, { user, expiresAt: now + 10000 });
+	}
+
 	async getUserById(id) {
 		if (id == null) return null;
 		const userId = Number(id);
@@ -542,7 +558,7 @@ class PostgresAdapter extends DatabaseAdapter {
 		);
 		const user = normalizeUserRow(rows[0]);
 		if (user) {
-			this._userCache.set(userId, { user, expiresAt: now + 10000 });
+			this._setCachedUser(user, now);
 		}
 		return user;
 	}
@@ -554,13 +570,13 @@ class PostgresAdapter extends DatabaseAdapter {
 
 		if (!this._userCache) this._userCache = new Map();
 		const now = Date.now();
-		const result = [];
+		const userMap = new Map();
 		const missingIds = [];
 
 		for (const id of ids) {
 			const cached = this._userCache.get(id);
 			if (cached && cached.expiresAt > now) {
-				result.push(cached.user);
+				userMap.set(id, cached.user);
 			} else {
 				missingIds.push(id);
 			}
@@ -574,13 +590,13 @@ class PostgresAdapter extends DatabaseAdapter {
 			for (const row of rows) {
 				const user = normalizeUserRow(row);
 				if (user) {
-					this._userCache.set(user.id, { user, expiresAt: now + 10000 });
-					result.push(user);
+					this._setCachedUser(user, now);
+					userMap.set(user.id, user);
 				}
 			}
 		}
 
-		return result;
+		return ids.map((id) => userMap.get(id)).filter(Boolean);
 	}
 
 	_invalidateUserCache(userId) {
@@ -817,7 +833,7 @@ class PostgresAdapter extends DatabaseAdapter {
 		const safeOffset = Math.max(Number(offset) || 0, 0);
 
 		const { rows } = await this.pool.query(
-			`SELECT id, name, scid, handle, nyaitter_address, auth_provider, provider_domain, external_id, icon_data
+			`SELECT *
 			 FROM users
 			 WHERE LOWER(COALESCE(scid, '')) LIKE $1
 				OR LOWER(COALESCE(name, '')) LIKE $1
@@ -841,8 +857,7 @@ class PostgresAdapter extends DatabaseAdapter {
 			? `WHERE id <> $${values.push(Number(excludedUserId))}`
 			: '';
 		const { rows } = await this.pool.query(
-			`SELECT id, name, scid, icon_data, admin, verify,
-				auth_provider, provider_domain, external_id, bio, created_at
+			`SELECT *
 			 FROM users
 			 ${exclusion}
 			 ORDER BY created_at DESC, id ASC
@@ -2294,13 +2309,13 @@ class PostgresAdapter extends DatabaseAdapter {
 		if (ids.length === 0) return [];
 
 		const cache = this._getPostCache();
-		const result = [];
+		const postMap = new Map();
 		const missingIds = [];
 
 		for (const id of ids) {
 			const cached = cache?.get(id);
 			if (cached) {
-				result.push(cached);
+				postMap.set(id, cached);
 			} else {
 				missingIds.push(id);
 			}
@@ -2315,12 +2330,12 @@ class PostgresAdapter extends DatabaseAdapter {
 				const post = normalizePostRow(row);
 				if (post) {
 					cache?.set(post.id, post);
-					result.push(post);
+					postMap.set(post.id, post);
 				}
 			}
 		}
 
-		return result;
+		return ids.map((id) => postMap.get(id)).filter(Boolean);
 	}
 
 	async getPostReferencesByIds(postIds, maxDepth = 2) {
@@ -2382,24 +2397,15 @@ class PostgresAdapter extends DatabaseAdapter {
 		if (!Number.isSafeInteger(id) || id <= 0) return null;
 
 		return this._withTransaction(async (client) => {
-			const [likeRes, starRes, repostRes, replyRes] = await Promise.all([
-				client.query('SELECT COUNT(*)::bigint AS count FROM likes WHERE post_id = $1', [id]),
-				client.query('SELECT COUNT(*)::bigint AS count FROM stars WHERE post_id = $1', [id]),
-				client.query('SELECT COUNT(*)::bigint AS count FROM reposts WHERE post_id = $1', [id]),
-				client.query('SELECT COUNT(*)::bigint AS count FROM posts WHERE reply_to = $1', [id]),
-			]);
-
-			const likes = Number(likeRes.rows[0]?.count || 0);
-			const stars = Number(starRes.rows[0]?.count || 0);
-			const reposts = Number(repostRes.rows[0]?.count || 0);
-			const replies = Number(replyRes.rows[0]?.count || 0);
-
 			const { rows } = await client.query(
 				`UPDATE posts
-				 SET like_count = $2, star_count = $3, repost_count = $4, reply_count = $5
+				 SET like_count = (SELECT COUNT(*)::int FROM likes WHERE post_id = $1),
+				     star_count = (SELECT COUNT(*)::int FROM stars WHERE post_id = $1),
+				     repost_count = (SELECT COUNT(*)::int FROM reposts WHERE post_id = $1),
+				     reply_count = (SELECT COUNT(*)::int FROM posts WHERE reply_to = $1)
 				 WHERE id = $1
 				 RETURNING *`,
-				[id, likes, stars, reposts, replies],
+				[id],
 			);
 			const post = normalizePostRow(rows[0] || null);
 			if (post) {
@@ -2413,17 +2419,19 @@ class PostgresAdapter extends DatabaseAdapter {
 		const id = Number(userId);
 		if (!Number.isSafeInteger(id) || id <= 0) return null;
 
-		const [followerRes, followingRes, postRes] = await Promise.all([
-			this.pool.query('SELECT COUNT(*)::bigint AS count FROM follows WHERE following_id = $1', [id]),
-			this.pool.query('SELECT COUNT(*)::bigint AS count FROM follows WHERE follower_id = $1', [id]),
-			this.pool.query('SELECT COUNT(*)::bigint AS count FROM posts WHERE user_id = $1 AND repost_to IS NULL', [id]),
-		]);
+		const { rows } = await this.pool.query(
+			`SELECT
+				(SELECT COUNT(*)::bigint FROM follows WHERE following_id = $1) AS follower_count,
+				(SELECT COUNT(*)::bigint FROM follows WHERE follower_id = $1) AS following_count,
+				(SELECT COUNT(*)::bigint FROM posts WHERE user_id = $1 AND repost_to IS NULL) AS post_count`,
+			[id],
+		);
 
 		return {
 			userId: id,
-			followerCount: Number(followerRes.rows[0]?.count || 0),
-			followingCount: Number(followingRes.rows[0]?.count || 0),
-			postCount: Number(postRes.rows[0]?.count || 0),
+			followerCount: Number(rows[0]?.follower_count || 0),
+			followingCount: Number(rows[0]?.following_count || 0),
+			postCount: Number(rows[0]?.post_count || 0),
 		};
 	}
 
@@ -2546,6 +2554,7 @@ class PostgresAdapter extends DatabaseAdapter {
 			}
 			if (post.repost_to) {
 				await client.query('UPDATE posts SET repost_count = GREATEST(0, repost_count - 1) WHERE id = $1', [Number(post.repost_to)]);
+				await client.query('DELETE FROM reposts WHERE user_id = $1 AND post_id = $2', [Number(userId), Number(post.repost_to)]);
 			}
 			await client.query('UPDATE posts SET repost_to = NULL WHERE repost_to = $1', [targetId]);
 			await client.query('DELETE FROM likes WHERE post_id = $1', [targetId]);
@@ -2561,7 +2570,7 @@ class PostgresAdapter extends DatabaseAdapter {
 		const targetId = Number(postId);
 		this._getPostCache()?.delete(targetId);
 		return this._withTransaction(async (client) => {
-			const { rows } = await client.query('SELECT reply_to, repost_to FROM posts WHERE id = $1 FOR UPDATE', [targetId]);
+			const { rows } = await client.query('SELECT user_id, reply_to, repost_to FROM posts WHERE id = $1 FOR UPDATE', [targetId]);
 			if (rows[0]) {
 				const post = rows[0];
 				if (post.reply_to) {
@@ -2569,6 +2578,9 @@ class PostgresAdapter extends DatabaseAdapter {
 				}
 				if (post.repost_to) {
 					await client.query('UPDATE posts SET repost_count = GREATEST(0, repost_count - 1) WHERE id = $1', [Number(post.repost_to)]);
+					if (post.user_id) {
+						await client.query('DELETE FROM reposts WHERE user_id = $1 AND post_id = $2', [Number(post.user_id), Number(post.repost_to)]);
+					}
 				}
 			}
 			await client.query('UPDATE posts SET repost_to = NULL WHERE repost_to = $1', [Number(postId)]);
@@ -2699,8 +2711,8 @@ class PostgresAdapter extends DatabaseAdapter {
 				   FROM posts p
 				   WHERE p.group_id IS NULL AND p.reply_to IS NULL AND p.user_id != $1 AND p.id < $2
 				   ORDER BY p.created_at DESC, p.id DESC
-				   LIMIT $3 OFFSET $4`;
-				params = [validViewerId, normalizedBeforeId, candidateLimit, normalizedOffset];
+				   LIMIT $3`;
+				params = [validViewerId, normalizedBeforeId, candidateLimit];
 			} else {
 				query = `SELECT p.id, p.user_id, p.created_at, p.tags,
 				          COALESCE(p.like_count, 0)::int AS like_count,
@@ -2720,8 +2732,8 @@ class PostgresAdapter extends DatabaseAdapter {
 			   FROM posts p
 			   WHERE p.group_id IS NULL AND p.reply_to IS NULL AND p.id < $1
 			   ORDER BY p.created_at DESC, p.id DESC
-			   LIMIT $2 OFFSET $3`;
-			params = [normalizedBeforeId, candidateLimit, normalizedOffset];
+			   LIMIT $2`;
+			params = [normalizedBeforeId, candidateLimit];
 		} else {
 			query = `SELECT p.id, p.user_id, p.created_at, p.tags,
 			          COALESCE(p.like_count, 0)::int AS like_count,
@@ -2745,47 +2757,61 @@ class PostgresAdapter extends DatabaseAdapter {
 		let reactedPostIds = new Set();
 
 		if (validViewerId != null) {
+			const fetchTasks = [];
 			const cachedAffinity = this._affinityCache.get(validViewerId);
 			if (cachedAffinity && cachedAffinity.expiresAt > now) {
 				keywordProfile = cachedAffinity.profile;
 			} else {
-				this.pool.query(
-					'SELECT keyword, score FROM user_keyword_affinities WHERE user_id = $1 ORDER BY score DESC LIMIT 25',
-					[validViewerId],
-				).then(({ rows }) => {
-					const prof = new Map(rows.map((r) => [String(r.keyword).toLowerCase(), Number(r.score) || 0]));
-					this._affinityCache.set(validViewerId, { profile: prof, expiresAt: Date.now() + 60000 });
-				}).catch(() => {});
+				fetchTasks.push(
+					this.pool.query(
+						'SELECT keyword, score FROM user_keyword_affinities WHERE user_id = $1 ORDER BY score DESC LIMIT 25',
+						[validViewerId],
+					).then(({ rows }) => {
+						keywordProfile = new Map(rows.map((r) => [String(r.keyword).toLowerCase(), Number(r.score) || 0]));
+						if (this._affinityCache.size >= 2000) this._affinityCache.clear();
+						this._affinityCache.set(validViewerId, { profile: keywordProfile, expiresAt: Date.now() + 60000 });
+					}).catch(() => {})
+				);
 			}
 
 			const cachedFollows = this._followCache.get(validViewerId);
 			if (cachedFollows && cachedFollows.expiresAt > now) {
 				directFollows = cachedFollows.follows;
 			} else {
-				this.pool.query(
-					'SELECT following_id FROM follows WHERE follower_id = $1 LIMIT 100',
-					[validViewerId],
-				).then(({ rows }) => {
-					const fset = new Set(rows.map((r) => Number(r.following_id)));
-					this._followCache.set(validViewerId, { follows: fset, expiresAt: Date.now() + 60000 });
-				}).catch(() => {});
+				fetchTasks.push(
+					this.pool.query(
+						'SELECT following_id FROM follows WHERE follower_id = $1 LIMIT 100',
+						[validViewerId],
+					).then(({ rows }) => {
+						directFollows = new Set(rows.map((r) => Number(r.following_id)));
+						if (this._followCache.size >= 2000) this._followCache.clear();
+						this._followCache.set(validViewerId, { follows: directFollows, expiresAt: Date.now() + 60000 });
+					}).catch(() => {})
+				);
 			}
 
 			const cachedReactions = this._reactionCache.get(validViewerId);
 			if (cachedReactions && cachedReactions.expiresAt > now) {
 				reactedPostIds = cachedReactions.posts;
 			} else {
-				this.pool.query(
-					`SELECT post_id FROM likes WHERE user_id = $1
-					 UNION
-					 SELECT post_id FROM stars WHERE user_id = $1
-					 UNION
-					 SELECT post_id FROM reposts WHERE user_id = $1`,
-					[validViewerId],
-				).then(({ rows }) => {
-					const rset = new Set(rows.map((r) => Number(r.post_id)));
-					this._reactionCache.set(validViewerId, { posts: rset, expiresAt: Date.now() + 60000 });
-				}).catch(() => {});
+				fetchTasks.push(
+					this.pool.query(
+						`SELECT post_id FROM likes WHERE user_id = $1
+						 UNION
+						 SELECT post_id FROM stars WHERE user_id = $1
+						 UNION
+						 SELECT post_id FROM reposts WHERE user_id = $1`,
+						[validViewerId],
+					).then(({ rows }) => {
+						reactedPostIds = new Set(rows.map((r) => Number(r.post_id)));
+						if (this._reactionCache.size >= 2000) this._reactionCache.clear();
+						this._reactionCache.set(validViewerId, { posts: reactedPostIds, expiresAt: Date.now() + 60000 });
+					}).catch(() => {})
+				);
+			}
+
+			if (fetchTasks.length > 0) {
+				await Promise.all(fetchTasks);
 			}
 		}
 
@@ -3226,7 +3252,7 @@ class PostgresAdapter extends DatabaseAdapter {
 
 			if (tags) {
 				const delta = liked ? 1 : -1;
-				this._adjustUserKeywordAffinitiesForTags(client, uId, tags, delta).catch(() => {});
+				await this._adjustUserKeywordAffinitiesForTags(client, uId, tags, delta);
 			}
 
 			return { liked, count };
@@ -3295,7 +3321,7 @@ class PostgresAdapter extends DatabaseAdapter {
 
 			if (tags) {
 				const delta = starred ? 3 : -3;
-				this._adjustUserKeywordAffinitiesForTags(client, uId, tags, delta).catch(() => {});
+				await this._adjustUserKeywordAffinitiesForTags(client, uId, tags, delta);
 			}
 
 			return { starred, count };
@@ -3393,6 +3419,10 @@ class PostgresAdapter extends DatabaseAdapter {
 			await client.query(
 				'INSERT INTO reposts (user_id, post_id, created_at) VALUES ($1, $2, $3)',
 				[Number(userId), Number(postId), now],
+			);
+			await client.query(
+				'UPDATE posts SET repost_count = repost_count + 1 WHERE id = $1',
+				[Number(postId)],
 			);
 
 			const origRow = original.rows[0];
@@ -3789,6 +3819,7 @@ class PostgresAdapter extends DatabaseAdapter {
 
 		const now = new Date().toISOString();
 		return this._withTransaction(async (client) => {
+			this._followCache?.delete(u1);
 			const delResult = await client.query(
 				'DELETE FROM follows WHERE follower_id = $1 AND following_id = $2 RETURNING 1',
 				[u1, u2],
@@ -3815,39 +3846,27 @@ class PostgresAdapter extends DatabaseAdapter {
 	async getFollowing(userId, limit = 100) {
 		const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
 		const { rows } = await this.pool.query(
-			`SELECT u.id, u.name, u.scid, u.handle, u.icon_data FROM follows f
+			`SELECT u.* FROM follows f
 			 JOIN users u ON u.id = f.following_id
 			 WHERE f.follower_id = $1
 			 ORDER BY f.created_at DESC
 			 LIMIT $2`,
 			[Number(userId), safeLimit],
 		);
-		return rows.map((r) => ({
-			id: Number(r.id),
-			name: r.name,
-			scid: r.scid || null,
-			handle: r.handle,
-			icon_data: r.icon_data || null,
-		}));
+		return rows.map(normalizeUserRow);
 	}
 
 	async getFollowers(userId, limit = 100) {
 		const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
 		const { rows } = await this.pool.query(
-			`SELECT u.id, u.name, u.scid, u.handle, u.icon_data FROM follows f
+			`SELECT u.* FROM follows f
 			 JOIN users u ON u.id = f.follower_id
 			 WHERE f.following_id = $1
 			 ORDER BY f.created_at DESC
 			 LIMIT $2`,
 			[Number(userId), safeLimit],
 		);
-		return rows.map((r) => ({
-			id: Number(r.id),
-			name: r.name,
-			scid: r.scid || null,
-			handle: r.handle,
-			icon_data: r.icon_data || null,
-		}));
+		return rows.map(normalizeUserRow);
 	}
 
 	async getFollowIds(userId) {
