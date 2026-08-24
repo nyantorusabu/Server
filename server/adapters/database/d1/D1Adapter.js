@@ -1017,10 +1017,15 @@ class D1Adapter extends DatabaseAdapter {
 		return { posts, hasMore: posts.length === limit };
 	}
 
-	async getTimelinePostIds({ tab = 'foryou', followIds = [], limit = 30, offset = 0, beforeId = null } = {}) {
+	async getTimelinePostIds({ tab = 'foryou', followIds = [], viewerId = null, limit = 30, offset = 0, beforeId = null } = {}) {
+		let resolvedFollowIds = this._normalizeIds(followIds);
+		if (tab === 'following' && resolvedFollowIds.length === 0 && viewerId != null) {
+			const followingUsers = await this.getFollowing(viewerId, 1000);
+			resolvedFollowIds = this._normalizeIds((followingUsers || []).map((u) => u.id));
+		}
 		const body = {
 			tab: String(tab),
-			followIds: this._normalizeIds(followIds),
+			followIds: resolvedFollowIds,
 			limit: this._limit(limit, 30),
 			offset: this._offset(offset),
 			beforeId: beforeId == null ? null : requireId(beforeId, 'beforeId', 1),
@@ -1476,6 +1481,59 @@ class D1Adapter extends DatabaseAdapter {
 		return Array.isArray(list) ? list : [];
 	}
 
+	// ==================== Polls ====================
+
+	async createPoll(pollData) {
+		return this._write('/polls', pollData);
+	}
+
+	async getPollByPostId(postId, currentUserId = null) {
+		return this._read(this._query(`/posts/${requireId(postId, 'postId')}/poll`, {
+			currentUserId: currentUserId == null ? null : requireId(currentUserId, 'currentUserId'),
+		}), { cacheSeconds: 0 });
+	}
+
+	async getPollById(pollId, currentUserId = null) {
+		return this._read(this._query(`/polls/${requireId(pollId, 'pollId')}`, {
+			currentUserId: currentUserId == null ? null : requireId(currentUserId, 'currentUserId'),
+		}), { cacheSeconds: 0 });
+	}
+
+	async getPollsByPostIds(postIds, currentUserId = null) {
+		const res = await this._read(this._query('/polls/by-posts', {
+			postIds: (postIds || []).map(Number).join(','),
+			currentUserId: currentUserId == null ? null : requireId(currentUserId, 'currentUserId'),
+		}), { cacheSeconds: 0 });
+		const map = new Map();
+		if (Array.isArray(res)) {
+			for (const p of res) {
+				if (p && p.post_id) map.set(Number(p.post_id), p);
+			}
+		}
+		return map;
+	}
+
+	async votePoll({ pollId, userId, optionIds = [], otherText = null }) {
+		return this._write(`/polls/${requireId(pollId, 'pollId')}/vote`, {
+			userId: requireId(userId, 'userId'),
+			optionIds,
+			otherText,
+		});
+	}
+
+	async getExpiredUnnotifiedPolls() {
+		const res = await this._read('/polls/expired-unnotified', { cacheSeconds: 0 });
+		return Array.isArray(res) ? res : [];
+	}
+
+	async markPollClosedNotified(pollId) {
+		return this._write(`/polls/${requireId(pollId, 'pollId')}/mark-notified`, {});
+	}
+
+	async getPollVoters(pollId) {
+		const res = await this._read(`/polls/${requireId(pollId, 'pollId')}/voters`, { cacheSeconds: 0 });
+		return Array.isArray(res) ? res : [];
+	}
 }
 
 module.exports = D1Adapter;
