@@ -40,7 +40,12 @@ const path = require('path');
 const fs = require('fs');
 const { isCrawler, generatePostOgpTags, generatePostHtml } = require('../services/OgpService');
 
-const router = express.Router();
+const api = require("../utils/ApiRegistry");
+const router = api.createRouter({
+	tag: "posts",
+	basePath: "/posts",
+	description: "投稿・タイムライン・リアクション API",
+});
 const { createRateLimiter } = require('../middleware/rateLimit');
 const postWriteLimiter = createRateLimiter(config.rateLimit.postWrite);
 const searchLimiter = createRateLimiter(config.rateLimit.profileUpdate ?? config.rateLimit.postWrite);
@@ -273,7 +278,11 @@ function createPostActionContext(req) {
 	};
 }
 
-router.post('/', requireAuth, postWriteLimiter, (req, res) => {
+router.post({
+	path: '/',
+	summary: '新規投稿の作成（返信・引用・メディア添付・CW等対応）',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, (req, res) => {
 	const {
 		content,
 		attachments = [],
@@ -328,7 +337,11 @@ router.post('/', requireAuth, postWriteLimiter, (req, res) => {
 	}
 });
 
-router.get('/', optionalAuth, async (req, res) => {
+router.get({
+	path: '/',
+	summary: '最新投稿一覧の取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 
 		try {
@@ -375,7 +388,11 @@ router.get('/', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/trending', optionalAuth, async (req, res) => {
+router.get({
+	path: '/trending',
+	summary: 'トレンド投稿一覧の取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 20, 50);
 
@@ -422,7 +439,11 @@ router.get('/trending', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/search', optionalAuth, searchLimiter, async (req, res) => {
+router.get({
+	path: '/search',
+	summary: '投稿キーワード検索',
+	auth: 'optional',
+}, optionalAuth, searchLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const q = req.query.q || '';
 	const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
@@ -479,7 +500,11 @@ router.get('/search', optionalAuth, searchLimiter, async (req, res) => {
 	}
 });
 
-router.get('/recommended', optionalAuth, async (req, res) => {
+router.get({
+	path: '/recommended',
+	summary: 'おすすめ投稿一覧の取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
 	const beforeId = safeParsePostId(req.query.before_id);
@@ -517,7 +542,11 @@ router.get('/recommended', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/page', optionalAuth, async (req, res) => {
+router.get({
+	path: '/page',
+	summary: '投稿一覧のページネーション取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const mode = String(req.query.mode || 'timeline');
 	if (mode === 'search') {
@@ -661,7 +690,11 @@ router.get('/page', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/ids', optionalAuth, async (req, res) => {
+router.get({
+	path: '/ids',
+	summary: 'タイムラインの投稿ID一覧取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const tab = req.query.tab || 'foryou';
 	const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
@@ -685,7 +718,11 @@ router.get('/ids', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/trending-hashtags', optionalAuth, async (req, res) => {
+router.get({
+	path: '/trending-hashtags',
+	summary: 'トレンドハッシュタグ・キーワード取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
 	const type = String(req.query.type || '').trim().toLowerCase();
@@ -710,7 +747,11 @@ router.get('/trending-hashtags', optionalAuth, async (req, res) => {
 	}
 });
 
-router.post('/hydrate', optionalAuth, async (req, res) => {
+router.post({
+	path: '/hydrate',
+	summary: '投稿IDリストから投稿オブジェクトを一括生成',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postIds = [...new Set((req.body.post_ids || [])
 		.map((id) => parseInt(id, 10))
@@ -733,7 +774,11 @@ router.post('/hydrate', optionalAuth, async (req, res) => {
 	}
 });
 
-router.post('/metrics', optionalAuth, async (req, res) => {
+router.post({
+	path: '/metrics',
+	summary: '投稿IDリストのメトリクス一括取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postIds = [...new Set((req.body.post_ids || [])
 		.map((id) => parseInt(id, 10))
@@ -764,7 +809,11 @@ router.post('/metrics', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id/thread', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/thread',
+	summary: '投稿のスレッド階層取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	if (!postId) return res.status(400).json({ error: 'Invalid post id' });
@@ -810,21 +859,42 @@ router.get('/:id/thread', optionalAuth, async (req, res) => {
 			});
 		}
 
+		// 先祖（親チェーン）の解決
+		const ancestorPosts = [];
+		let currentParentId = root.replyTo ?? root.reply_id ?? root.reply_to;
+		const visitedParentIds = new Set([postId]);
+		while (currentParentId != null) {
+			const numParentId = Number(currentParentId);
+			if (!Number.isInteger(numParentId) || numParentId <= 0 || visitedParentIds.has(numParentId)) {
+				break;
+			}
+			visitedParentIds.add(numParentId);
+			const parentPost = await db.getPostById(numParentId);
+			if (!parentPost) break;
+			ancestorPosts.unshift(parentPost); // ルート親から直前親への昇順
+			currentParentId = parentPost.replyTo ?? parentPost.reply_id ?? parentPost.reply_to;
+		}
+
+		const postsToSerialize = [...ancestorPosts, root, ...orderedReplyPosts];
 		const serializedPosts = await serializePostsBatch(
 			db,
-			[root, ...orderedReplyPosts],
+			postsToSerialize,
 			currentUserId,
 			getPublicUrl(req),
 			knownViewer,
 		);
-		const mainPost = serializedPosts[0] || null;
+		const serializedAncestors = serializedPosts.slice(0, ancestorPosts.length);
+		const mainPost = serializedPosts[ancestorPosts.length] || null;
+		const serializedReplies = serializedPosts.slice(ancestorPosts.length + 1);
+
 		if (!mainPost) {
 			return res.status(404).json({ error: 'Post not found' });
 		}
 
 		res.json({
 			post: mainPost,
-			replies: serializedPosts.slice(1),
+			ancestors: serializedAncestors,
+			replies: serializedReplies,
 			has_more: replyPage.has_more,
 			offset,
 			limit,
@@ -835,7 +905,11 @@ router.get('/:id/thread', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id',
+	summary: '個別投稿の取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const currentUserId = req.user ? req.user.id : null;
@@ -898,7 +972,11 @@ router.get('/:id', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id/replies', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/replies',
+	summary: '個別投稿のリプライ一覧取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const currentUserId = req.user ? req.user.id : null;
@@ -939,7 +1017,11 @@ router.get('/:id/replies', optionalAuth, async (req, res) => {
 	}
 });
 
-router.post('/:id/like', requireAuth, postWriteLimiter, async (req, res) => {
+router.post({
+	path: '/:id/like',
+	summary: '投稿へのいいね（トグル）',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const storage = getStorageAdapter(req);
 	const postService = new PostService({ dbAdapter: db, storageAdapter: storage });
@@ -984,7 +1066,11 @@ router.post('/:id/like', requireAuth, postWriteLimiter, async (req, res) => {
 	}
 });
 
-router.post('/:id/star', requireAuth, postWriteLimiter, async (req, res) => {
+router.post({
+	path: '/:id/star',
+	summary: '投稿へのスター（トグル）',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const storage = getStorageAdapter(req);
 	const postService = new PostService({ dbAdapter: db, storageAdapter: storage });
@@ -1017,7 +1103,11 @@ router.post('/:id/star', requireAuth, postWriteLimiter, async (req, res) => {
 	}
 });
 
-router.delete('/:id', requireAuth, postWriteLimiter, (req, res) => {
+router.delete({
+	path: '/:id',
+	summary: '個別投稿の削除',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, (req, res) => {
 	const postId = safeParsePostId(req.params.id);
 	if (!postId) {
 		return res.status(400).json({ error: 'Invalid post id' });
@@ -1040,7 +1130,11 @@ router.delete('/:id', requireAuth, postWriteLimiter, (req, res) => {
 	}
 });
 
-router.delete('/admin/:id', requireAuth, postWriteLimiter, (req, res) => {
+router.delete({
+	path: '/admin/:id',
+	summary: '管理者による投稿削除',
+	auth: 'admin',
+}, requireAuth, postWriteLimiter, (req, res) => {
 	const postId = safeParsePostId(req.params.id);
 
 	if (!req.user.admin) {
@@ -1067,7 +1161,11 @@ router.delete('/admin/:id', requireAuth, postWriteLimiter, (req, res) => {
 	}
 });
 
-router.get('/:id/activity', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/activity',
+	summary: '投稿のアクティビティ情報取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 
@@ -1110,7 +1208,11 @@ router.get('/:id/activity', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id/quotes', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/quotes',
+	summary: '投稿の引用ポスト一覧取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
@@ -1134,7 +1236,11 @@ router.get('/:id/quotes', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id/reposts', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/reposts',
+	summary: '投稿のリポスト一覧取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
@@ -1157,7 +1263,11 @@ router.get('/:id/reposts', optionalAuth, async (req, res) => {
 	}
 });
 
-router.get('/:id/likes', optionalAuth, async (req, res) => {
+router.get({
+	path: '/:id/likes',
+	summary: '投稿にいいねしたユーザー一覧取得',
+	auth: 'optional',
+}, optionalAuth, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
@@ -1184,7 +1294,11 @@ router.get('/:id/likes', optionalAuth, async (req, res) => {
 	}
 });
 
-router.post('/:id/repost', requireAuth, postWriteLimiter, async (req, res) => {
+router.post({
+	path: '/:id/repost',
+	summary: '投稿のリポスト実行',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const userId = req.user.id;
@@ -1209,7 +1323,11 @@ router.post('/:id/repost', requireAuth, postWriteLimiter, async (req, res) => {
 	}
 });
 
-router.post('/:id/pin', requireAuth, postWriteLimiter, async (req, res) => {
+router.post({
+	path: '/:id/pin',
+	summary: 'プロフィールの固定投稿ピン留め（トグル）',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const userId = req.user.id;
@@ -1228,7 +1346,11 @@ router.post('/:id/pin', requireAuth, postWriteLimiter, async (req, res) => {
 	}
 });
 
-router.post('/:id/dislike', requireAuth, postWriteLimiter, async (req, res) => {
+router.post({
+	path: '/:id/dislike',
+	summary: '投稿への低評価',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, async (req, res) => {
 	const db = getDbAdapter(req);
 	const postId = safeParsePostId(req.params.id);
 	const userId = req.user.id;
@@ -1248,7 +1370,11 @@ router.post('/:id/dislike', requireAuth, postWriteLimiter, async (req, res) => {
 	}
 });
 
-router.put('/:id', requireAuth, postWriteLimiter, (req, res) => {
+router.put({
+	path: '/:id',
+	summary: '個別投稿の編集・更新',
+	auth: 'required',
+}, requireAuth, postWriteLimiter, (req, res) => {
 	const postId = safeParsePostId(req.params.id);
 	const userId = req.user.id;
 
