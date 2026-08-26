@@ -124,8 +124,12 @@ function normalizeApiEndpoint(value, fallback = '/server') {
 function normalizeUserFilesEndpoint(value) {
   const candidate = String(value === undefined || value === null ? '' : value).trim();
   if (!candidate) return null;
+  // 外部URL（http/https）も許可
+  if (candidate.startsWith('http://') || candidate.startsWith('https://')) {
+    return candidate.replace(/\/+$/, '');
+  }
   if (!candidate.startsWith('/')) {
-    console.warn('[config] User-files endpoint must start with "/"; file serving is disabled.');
+    console.warn('[config] User-files endpoint must start with "/" or be a full HTTP(S) URL; file serving is disabled.');
     return null;
   }
   if (candidate === '/') return '/';
@@ -933,6 +937,7 @@ const config = {
   },
 
   postSharePort: envNonNegativeInteger('POST_SHARE_PORT', get('postSharePort', get('posts.sharePort', 0))) || null,
+  postShareUrl: process.env.POST_SHARE_URL || get('postShareUrl', get('posts.shareUrl', '')) || null,
   frontendUrl: process.env.FRONTEND_URL || get('frontendUrl', get('client.url', '')),
 
   raw: rawConfig,
