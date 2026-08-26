@@ -47,6 +47,7 @@ class ManagementToolServer {
       config: this.config,
       notificationManager: this.notificationManager,
     });
+    this.errorManager.setSecurityManager(this.securityManager);
     this.adminManager = new AdminManager({ dbAdapter });
     this.serverControl = new ServerControlManager({ shutdownFn, getStatusFn });
     this.authManager = new NyaitterAuthManager({ dbAdapter });
@@ -390,6 +391,16 @@ class ManagementToolServer {
       }
     });
 
+    this.app.post('/api/errors/:id/escalate-security', authMiddleware, async (req, res) => {
+      try {
+        const incidentId = await this.errorManager.escalateToSecurity(req.params.id);
+        if (!incidentId) return res.status(404).json({ error: 'エラーが見つからないか、昇格できません。' });
+        res.json({ success: true, incidentId });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
     this.app.post('/api/errors/:id/fix', authMiddleware, async (req, res) => {
       try {
         const result = await this.errorManager.triggerAutoFix(req.params.id);
@@ -617,7 +628,7 @@ class ManagementToolServer {
         if (r?.ok) return res.json({ notifications: r.notifications, isSubscribed: false });
       } catch (_) {}
       res.json({
-        notifications: this.notificationManager.getNotifications(50),
+        notifications: this.notificationManager.getNotifications(50, req.adminUser.id),
         isSubscribed: this.notificationManager.isUserSubscribed(req.adminUser.id),
       });
     });
@@ -636,7 +647,7 @@ class ManagementToolServer {
       });
       res.write(': connected\n\n');
 
-      this.notificationManager.addClient(res, session.userId);
+      this.notificationManager.addClient(res, session.userId, req.headers['last-event-id'] || '');
     });
 
     this.app.post('/api/notifications/subscribe', authMiddleware, (req, res) => {
@@ -650,7 +661,7 @@ class ManagementToolServer {
     });
 
     this.app.post('/api/notifications/read-all', authMiddleware, (req, res) => {
-      this.notificationManager.markAllAsRead();
+      this.notificationManager.markAllAsRead(req.adminUser.id);
       res.json({ success: true });
     });
 
