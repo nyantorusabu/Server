@@ -50,6 +50,7 @@ class ManagementToolServer {
     this.errorManager.setSecurityManager(this.securityManager);
     this.adminManager = new AdminManager({ dbAdapter });
     this.serverControl = new ServerControlManager({ shutdownFn, getStatusFn });
+    this.errorManager.setServerControl(this.serverControl);
     this.authManager = new NyaitterAuthManager({ dbAdapter });
 
     this.app = null;
@@ -511,6 +512,8 @@ class ManagementToolServer {
       };
 
       res.json({
+        mode: process.env.NMT_MODE || this.errorManager.mode || 'record_only',
+        guidelines: process.env.NMT_GUIDELINES || this.errorManager.guidelines || '',
         autoAnalysis: getEnvBool('NMT_AUTO_ANALYSIS', this.errorManager.autoAnalysis),
         autoFix: getEnvBool('NMT_AUTO_FIX', this.errorManager.autoFix),
         autoIssue: getEnvBool('NMT_AUTO_ISSUE', this.errorManager.autoIssue),
@@ -527,6 +530,8 @@ class ManagementToolServer {
         aiModel: process.env.NMT_AI_MODEL || process.env.GEMINI_MODEL || this.aiService.preferredModel || 'auto',
         githubToken: (process.env.NMT_GITHUB_TOKEN || process.env.GITHUB_TOKEN || this.errorManager.githubToken) ? '********' : '',
         githubRepo: process.env.NMT_GITHUB_REPO || process.env.GITHUB_REPO || this.errorManager.githubRepo,
+        gitAuthorName: process.env.NMT_GIT_AUTHOR_NAME || this.errorManager.gitAuthorName || 'nyantorusabu',
+        gitAuthorEmail: process.env.NMT_GIT_AUTHOR_EMAIL || this.errorManager.gitAuthorEmail || 'nyantorusabu@outlook.jp',
         geminiApiKey: (process.env.NMT_GEMINI_API_KEY || process.env.GEMINI_API_KEY || this.aiService.geminiApiKey) ? '********' : '',
         openaiApiKey: (process.env.NMT_OPENAI_API_KEY || process.env.OPENAI_API_KEY || this.aiService.openaiApiKey) ? '********' : '',
       });
@@ -534,6 +539,8 @@ class ManagementToolServer {
 
     this.app.post('/api/settings', authMiddleware, (req, res) => {
       const {
+        mode,
+        guidelines,
         autoAnalysis,
         autoFix,
         autoIssue,
@@ -545,11 +552,27 @@ class ManagementToolServer {
         aiModel,
         githubToken,
         githubRepo,
+        gitAuthorName,
+        gitAuthorEmail,
         geminiApiKey,
         openaiApiKey,
       } = req.body;
       
       const envMap = {};
+      if (mode !== undefined) {
+        envMap.NMT_MODE = mode;
+        if (mode === 'auto') {
+          envMap.NMT_AUTO_FIX = 'true';
+          envMap.NMT_AUTO_ANALYSIS = 'true';
+        } else if (mode === 'analysis_only') {
+          envMap.NMT_AUTO_FIX = 'false';
+          envMap.NMT_AUTO_ANALYSIS = 'true';
+        } else {
+          envMap.NMT_AUTO_FIX = 'false';
+          envMap.NMT_AUTO_ANALYSIS = 'false';
+        }
+      }
+      if (guidelines !== undefined) envMap.NMT_GUIDELINES = guidelines;
       if (autoAnalysis !== undefined) envMap.NMT_AUTO_ANALYSIS = String(autoAnalysis);
       if (autoFix !== undefined) envMap.NMT_AUTO_FIX = String(autoFix);
       if (autoIssue !== undefined) envMap.NMT_AUTO_ISSUE = String(autoIssue);
@@ -575,6 +598,8 @@ class ManagementToolServer {
         envMap.NMT_GITHUB_TOKEN = githubToken;
       }
       if (githubRepo !== undefined) envMap.NMT_GITHUB_REPO = githubRepo;
+      if (gitAuthorName !== undefined) envMap.NMT_GIT_AUTHOR_NAME = gitAuthorName;
+      if (gitAuthorEmail !== undefined) envMap.NMT_GIT_AUTHOR_EMAIL = gitAuthorEmail;
       if (geminiApiKey && geminiApiKey !== '********') {
         envMap.NMT_GEMINI_API_KEY = geminiApiKey;
       }
@@ -586,6 +611,8 @@ class ManagementToolServer {
       this.serverControl.updateEnvVariables(envMap);
 
       const newSettings = {};
+      if (mode !== undefined) newSettings.mode = mode;
+      if (guidelines !== undefined) newSettings.guidelines = guidelines;
       if (autoAnalysis !== undefined) newSettings.autoAnalysis = autoAnalysis;
       if (autoFix !== undefined) newSettings.autoFix = autoFix;
       if (autoIssue !== undefined) newSettings.autoIssue = autoIssue;
@@ -601,6 +628,8 @@ class ManagementToolServer {
       if (aiModel !== undefined) newSettings.aiModel = aiModel;
       if (githubToken && githubToken !== '********') newSettings.githubToken = githubToken;
       if (githubRepo !== undefined) newSettings.githubRepo = githubRepo;
+      if (gitAuthorName !== undefined) newSettings.gitAuthorName = gitAuthorName;
+      if (gitAuthorEmail !== undefined) newSettings.gitAuthorEmail = gitAuthorEmail;
       if (geminiApiKey && geminiApiKey !== '********') newSettings.geminiApiKey = geminiApiKey;
       if (openaiApiKey && openaiApiKey !== '********') newSettings.openaiApiKey = openaiApiKey;
 
