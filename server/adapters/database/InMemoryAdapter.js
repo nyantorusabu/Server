@@ -1350,7 +1350,7 @@ class InMemoryAdapter extends DatabaseAdapter {
 				}))
 				.filter(({ group, membership }) => group && !group.deletedAt && membership?.status === 'active' && Boolean(group.iconData) && (group.visibility === 'open' || group.visibility === 'open_invite'))
 				.sort((a, b) => String(b.membership.joinedAt || '').localeCompare(String(a.membership.joinedAt || '')))
-				.slice(0, 3)
+				.slice(0, 5)
 				.map(({ group }) => ({
 					id: String(group.id),
 					name: String(group.name || ''),
@@ -2314,6 +2314,45 @@ class InMemoryAdapter extends DatabaseAdapter {
 
 		return {
 			following: !currentlyFollowing,
+		};
+	}
+
+	async toggleBlock(userId, targetUserId) {
+		const uid = Number(userId);
+		const tid = Number(targetUserId);
+		if (!Number.isInteger(uid) || !Number.isInteger(tid) || uid <= 0 || tid <= 0) {
+			throw new Error('Invalid user ID');
+		}
+		if (uid === tid) {
+			throw new Error('Cannot block yourself');
+		}
+		const user = this.users.get(uid);
+		if (!user) {
+			throw new Error('User not found');
+		}
+		const currentBlock = normalizeBlockList(user.block, uid);
+		const isBlocked = currentBlock.includes(tid);
+		const newBlock = isBlocked
+			? currentBlock.filter((id) => id !== tid)
+			: [...currentBlock, tid];
+		user.block = normalizeBlockList(newBlock, uid);
+
+		if (!isBlocked) {
+			const k1 = `${uid}:${tid}`;
+			if (this.follows.has(k1)) {
+				this.follows.delete(k1);
+				this._updateFollowIndexes(uid, tid, false);
+			}
+			const k2 = `${tid}:${uid}`;
+			if (this.follows.has(k2)) {
+				this.follows.delete(k2);
+				this._updateFollowIndexes(tid, uid, false);
+			}
+		}
+
+		return {
+			blocked: !isBlocked,
+			block: user.block,
 		};
 	}
 

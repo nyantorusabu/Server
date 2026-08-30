@@ -1569,6 +1569,51 @@ export default {
 				return json({ following: true });
 			}
 
+			if (method === 'POST' && pathname.match(/^\/users\/(\d+)\/block$/)) {
+				const targetUserId = Number(pathname.split('/')[2]);
+				const body = await request.json();
+				const userId = Number(body.userId);
+				if (!userId || !targetUserId) {
+					return json({ error: 'Invalid user id' }, 400);
+				}
+				if (userId === targetUserId) {
+					return json({ error: 'Cannot block yourself' }, 400);
+				}
+
+				const user = await db.prepare('SELECT id, block FROM users WHERE id = ?').bind(userId).first();
+				if (!user) {
+					return json({ error: 'User not found' }, 404);
+				}
+
+				let currentBlock = [];
+				try {
+					currentBlock = Array.isArray(user.block) ? user.block : JSON.parse(user.block || '[]');
+				} catch (_) {
+					currentBlock = [];
+				}
+				currentBlock = Array.isArray(currentBlock)
+					? currentBlock.map(Number).filter((n) => Number.isInteger(n) && n > 0 && n !== userId)
+					: [];
+
+				const isBlocked = currentBlock.includes(targetUserId);
+				const newBlock = isBlocked
+					? currentBlock.filter((id) => id !== targetUserId)
+					: [...currentBlock, targetUserId];
+				const sortedBlock = [...new Set(newBlock)].sort((a, b) => a - b);
+
+				await db.prepare('UPDATE users SET block = ? WHERE id = ?').bind(JSON.stringify(sortedBlock), userId).run();
+
+				if (!isBlocked) {
+					await db.prepare('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)')
+						.bind(userId, targetUserId, targetUserId, userId).run();
+				}
+
+				return json({
+					blocked: !isBlocked,
+					block: sortedBlock,
+				});
+			}
+
 			if (method === 'GET' && pathname.match(/^\/users\/(\d+)\/is-following$/)) {
 				const followingId = Number(pathname.split('/')[2]);
 				const followerId = Number(url.searchParams.get('followerId'));
@@ -1753,7 +1798,7 @@ export default {
 				for (const row of results || []) {
 					const uid = Number(row.user_id);
 					if (!badges[uid]) badges[uid] = [];
-					if (badges[uid].length < 3) {
+					if (badges[uid].length < 5) {
 						badges[uid].push({
 							id: String(row.group_id),
 							name: row.name || '',

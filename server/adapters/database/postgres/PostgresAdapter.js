@@ -2025,7 +2025,7 @@ class PostgresAdapter extends DatabaseAdapter {
 			)
 			SELECT user_id, group_id, name, icon_data
 			FROM ranked_badges
-			WHERE rn <= 3
+			WHERE rn <= 5
 			ORDER BY user_id, rn ASC`,
 			[ids],
 		);
@@ -4669,6 +4669,46 @@ class PostgresAdapter extends DatabaseAdapter {
 		return result;
 	}
 
+	async toggleBlock(userId, targetUserId) {
+		const u1 = Number(userId);
+		const u2 = Number(targetUserId);
+		if (!Number.isInteger(u1) || !Number.isInteger(u2) || u1 <= 0 || u2 <= 0) {
+			throw new Error('Invalid user ID');
+		}
+		if (u1 === u2) {
+			throw new Error('Cannot block yourself');
+		}
+
+		return this._withTransaction(async (client) => {
+			const userRes = await client.query('SELECT id, "block" FROM users WHERE id = $1 FOR UPDATE', [u1]);
+			if (userRes.rows.length === 0) {
+				throw new Error('User not found');
+			}
+			const rawBlock = parseJsonSafe(userRes.rows[0].block, []);
+			const currentBlock = normalizeBlockList(rawBlock, u1);
+			const isBlocked = currentBlock.includes(u2);
+			const newBlock = isBlocked
+				? currentBlock.filter((id) => id !== u2)
+				: [...currentBlock, u2];
+			const normalized = normalizeBlockList(newBlock, u1);
+			await client.query('UPDATE users SET "block" = $2::jsonb WHERE id = $1', [u1, JSON.stringify(normalized)]);
+
+			if (!isBlocked) {
+				await client.query(
+					'DELETE FROM follows WHERE (follower_id = $1 AND following_id = $2) OR (follower_id = $2 AND following_id = $1)',
+					[u1, u2],
+				);
+				this._followCache?.delete(u1);
+				this._followCache?.delete(u2);
+			}
+
+			return {
+				blocked: !isBlocked,
+				block: normalized,
+			};
+		});
+	}
+
 	async isFollowing(followerId, followingId) {
 		const { rows } = await this.pool.query(
 			'SELECT 1 FROM follows WHERE follower_id = $1 AND following_id = $2 LIMIT 1',
@@ -5307,7 +5347,7 @@ class PostgresAdapter extends DatabaseAdapter {
 						  AND g.deleted_at IS NULL AND g.icon_data IS NOT NULL AND g.icon_data <> ''
 						  AND g.visibility IN ('open', 'open_invite')
 						ORDER BY gm.joined_at DESC NULLS LAST, g.created_at DESC
-						LIMIT 3
+						LIMIT 5
 					) g
 				), '[]'::jsonb) AS group_badges,
 				COALESCE((SELECT jsonb_agg(to_jsonb(n) ORDER BY n.created_at DESC, n.id DESC) FROM notification_rows n), '[]'::jsonb)
