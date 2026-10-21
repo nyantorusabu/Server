@@ -61,10 +61,17 @@ const { startAccountRecoveryScheduler } = require('./services/AccountRecoverySch
 const PostActionQueue = require('./services/PostActionQueue');
 const PostEventOutbox = require('./services/PostEventOutbox');
 const PostKeywordBackfillService = require('./services/PostKeywordBackfillService');
-const { getPublicUrl, getFrontendUrl } = require('./utils/nyaitterAddress');
+const { getPublicUrl, getFrontendUrl, getPostShareUrl } = require('./utils/nyaitterAddress');
 const { startOperatorControlServer } = require('./utils/operatorControl');
 const { getEmbeddedMailServer } = require('./services/mail/EmbeddedMailServer');
-const { isCrawler, generatePostOgpTags, generatePostHtml } = require('./services/OgpService');
+const {
+    isCrawler,
+    generatePostOgpTags,
+    generatePostHtml,
+    generateGroupHtml,
+    generateStageHtml,
+} = require('./services/OgpService');
+const { getPublicGroup, getPublicStage } = require('./services/EmbedService');
 const { getGuestCallSession } = require('./services/GuestCallSessionService');
 
 let embeddedMailServer = null;
@@ -85,7 +92,11 @@ if (process.env.DEV_BYPASS_AUTH === 'true') {
 const app = express();
 app.disable('x-powered-by');
 
-const PORT = Number(process.env.PORT) || config.server.port || 3000;
+const PORT = config.server.port || 3000;
+const LISTEN_HOST = config.server.listenHost;
+const DISPLAY_HOST = LISTEN_HOST || 'localhost';
+const USER_FILES_HOST = config.userFiles.listenHost;
+const POST_SHARE_HOST = config.postShareListenHost;
 const API_ENDPOINT = config.server.apiEndpoint;
 const apiPath = (suffix = '') => {
     const normalizedSuffix = String(suffix || '').replace(/^\/+/, '');
@@ -553,6 +564,62 @@ if (hasStaticPage) {
             })();
         }
 
+        // ── Dynamic OGP Rendering for Group & Stage URLs ──
+        const embedMatch = cleanPath.match(/^\/(groups?|stages?|spaces?)\/([^/]+)\/?$/i);
+        if (embedMatch) {
+            const kind = /^group/i.test(embedMatch[1]) ? 'group' : 'stage';
+            const embedId = embedMatch[2];
+            return (async () => {
+                try {
+                    const db = app.locals.dbAdapter;
+                    const publicUrl = getPublicUrl(req);
+                    const shareBase = getPostShareUrl(req).replace(/\/+$/, '');
+                    const frontendUrl = getFrontendUrl(req).replace(/\/+$/, '');
+                    const userAgent = req.headers['user-agent'] || '';
+
+                    if (kind === 'group') {
+                        const group = await getPublicGroup(db, embedId);
+                        if (isCrawler(userAgent)) {
+                            if (!group) return res.status(404).type('text/plain').send('Not Found');
+                            const html = generateGroupHtml({
+                                group,
+                                publicUrl,
+                                frontendUrl,
+                                shareUrl: `${shareBase}/groups/${encodeURIComponent(group.id)}`,
+                            });
+                            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                            return res.send(html);
+                        }
+                        // クローラー以外は限定公開・非公開でもログイン済みなら
+                        // クライアント側で閲覧できるよう SPA へ返す。
+                        const visibleGroup = group || await db.getGroupById(String(embedId).toLowerCase()).catch(() => null);
+                        if (!visibleGroup) return res.status(404).type('text/plain').send('Not Found');
+                        return res.redirect(302, `${frontendUrl}/#group/${encodeURIComponent(embedId.toLowerCase())}`);
+                    }
+
+                    const result = await getPublicStage(db, embedId);
+                    if (isCrawler(userAgent)) {
+                        if (!result) return res.status(404).type('text/plain').send('Not Found');
+                        const html = generateStageHtml({
+                            stage: result.stage,
+                            host: result.host,
+                            publicUrl,
+                            frontendUrl,
+                            shareUrl: `${shareBase}/stages/${encodeURIComponent(result.stage.id)}`,
+                        });
+                        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                        return res.send(html);
+                    }
+                    const visibleStage = result?.stage || await db.getSpaceById(String(embedId).toLowerCase()).catch(() => null);
+                    if (!visibleStage) return res.status(404).type('text/plain').send('Not Found');
+                    return res.redirect(302, `${frontendUrl}/#stage/${encodeURIComponent(embedId.toLowerCase())}`);
+                } catch (err) {
+                    console.warn('[ogp] Failed to render group/stage embed:', err.message);
+                    return res.status(404).type('text/plain').send('Not Found');
+                }
+            })();
+        }
+
         if (cleanPath.endsWith('.html')) {
             const targetPath = cleanPath.slice(0, -5);
             const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
@@ -687,12 +754,8 @@ async function startServer() {
     app.locals.dbAdapter = dbAdapter;
     app.locals.storageAdapter = storageAdapter;
     const userFileEndpoint = config.userFiles?.endpoint || null;
-const postShareUrl = config.postShareUrl
-    ? config.postShareUrl
-    : (config.postSharePort
-        ? `${config.server.publicUrl || ''}`.replace(/\/+$/, '') + `:${config.postSharePort}`.replace(/^:+/, '')
-        : null);
-const turnstileSiteKey = config.turnstile?.siteKey || '';
+    const postShareUrl = getPostShareUrl();
+    const turnstileSiteKey = config.turnstile?.siteKey || '';
 
     moderationScheduler = startModerationAssignmentScheduler(moderationReportService);
     pollExpirationScheduler = startPollExpirationScheduler(dbAdapter);
@@ -719,15 +782,15 @@ const turnstileSiteKey = config.turnstile?.siteKey || '';
     });
     console.log(`[operator-control] Listening on ${operatorControl.socketPath}`);
 
-    httpServer.listen(PORT, async () => {
+    httpServer.listen(PORT, LISTEN_HOST, async () => {
         console.log(`
 ╔══════════════════════════════════════════════════════════════
 ║  Nyaitter Server                                           
 ╠══════════════════════════════════════════════════════════════
-║  Server running at:   http://localhost:${PORT}
+║  Server running at:   http://${DISPLAY_HOST}:${PORT}
 ║
-║  Health check:        http://localhost:${PORT}${apiPath('/health')}
-║  Frontend (SPA):      http://localhost:${PORT}/
+║  Health check:        http://${DISPLAY_HOST}:${PORT}${apiPath('/health')}
+║  Frontend (SPA):      http://${DISPLAY_HOST}:${PORT}/
 ║
 ║  DB Adapter:      ${process.env.DB_ADAPTER || 'memory'}
 ║  Storage Adapter: ${process.env.STORAGE_ADAPTER || 'local'}
@@ -738,8 +801,8 @@ const turnstileSiteKey = config.turnstile?.siteKey || '';
             userFilesServer.once('error', (error) => {
                 console.error(`[user-files] Failed to listen on port ${userFilesPort}:`, error.message);
             });
-            userFilesServer.listen(userFilesPort, () => {
-                console.log(`[user-files] Serving ${userFilesEndpoint} on http://localhost:${userFilesPort}${userFilesEndpoint}`);
+            userFilesServer.listen(userFilesPort, USER_FILES_HOST, () => {
+                console.log(`[user-files] Serving ${userFilesEndpoint} on http://${USER_FILES_HOST || 'localhost'}:${userFilesPort}${userFilesEndpoint}`);
             });
         }
 
@@ -749,8 +812,8 @@ const turnstileSiteKey = config.turnstile?.siteKey || '';
             postShareServer.once('error', (error) => {
                 console.error(`[share-server] Failed to listen on port ${sharePort}:`, error.message);
             });
-            postShareServer.listen(sharePort, () => {
-                console.log(`[share-server] Listening for post share traffic on http://localhost:${sharePort}`);
+            postShareServer.listen(sharePort, POST_SHARE_HOST, () => {
+                console.log(`[share-server] Listening for post share traffic on http://${POST_SHARE_HOST || 'localhost'}:${sharePort}`);
             });
         }
 

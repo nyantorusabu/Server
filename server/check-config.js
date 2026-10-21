@@ -6,6 +6,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const { parseDuration, parseIntegerRange } = require('./utils/settingFormats');
 const { normalizeProviders } = require('./utils/aiSettings');
+const { isValidHost, parseBindAddress } = require('./utils/listenAddress');
 
 const SERVER_DIR = __dirname;
 const ENV_PATH = path.join(SERVER_DIR, '.env');
@@ -55,6 +56,19 @@ function isHttpUrl(value) {
     try {
         const url = new URL(String(value));
         return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch (_) {
+        return false;
+    }
+}
+
+function isNormalizedHttpUrl(value) {
+    try {
+        const url = new URL(String(value).trim());
+        return (
+            (url.protocol === 'http:' || url.protocol === 'https:') &&
+            url.username === '' &&
+            url.password === ''
+        );
     } catch (_) {
         return false;
     }
@@ -132,14 +146,50 @@ function inspect() {
     const nodeEnv = String(process.env.NODE_ENV || 'development').toLowerCase();
     const isProduction = nodeEnv === 'production';
 
-    const port = Number(setting('PORT', config, 'server.port', 3000));
+    const hostSetting = firstSetting(['NYAITTER_HOST'], config, ['server.host'], '');
+    const bindSetting = firstSetting(['NYAITTER_BIND'], config, ['server.bind'], '');
+    const rawPort = setting('PORT', config, 'server.port', 3000);
+    const port = Number(rawPort);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         addIssue(
             'error',
             'PORT_INVALID',
-            `PORT が有効なTCPポートではありません: ${setting('PORT', config, 'server.port')}`,
+            `PORT が有効なTCPポートではありません: ${rawPort}`,
             'PORT または server.port を1から65535までの整数に設定してください。',
         );
+    }
+
+    if (String(bindSetting || '').trim() && !parseBindAddress(bindSetting)) {
+        addIssue(
+            'error',
+            'BIND_INVALID',
+            `NYAITTER_BIND / server.bind が host:port として解釈できません: ${bindSetting}`,
+            'NYAITTER_BIND または server.bind に 0.0.0.0:3000、[::]:3000、:3000、3000、127.0.0.1 のいずれかを設定してください。',
+        );
+    }
+    if (String(hostSetting || '').trim() && !isValidHost(String(hostSetting).trim())) {
+        addIssue(
+            'error',
+            'HOST_INVALID',
+            `NYAITTER_HOST / HOST / server.host がホスト名またはIPアドレスとして無効です: ${hostSetting}`,
+            'ホスト名、IPv4、IPv6 のいずれかを設定するか、未設定にして全インターフェースで待ち受けてください。',
+        );
+    }
+
+    const perServerHosts = [
+        { value: firstSetting(['NYAITTER_USER_FILES_HOST'], config, ['userFiles.host'], ''), label: 'NYAITTER_USER_FILES_HOST / userFiles.host' },
+        { value: firstSetting(['NYAITTER_POST_SHARE_HOST'], config, ['postShare.host', 'posts.shareHost'], ''), label: 'NYAITTER_POST_SHARE_HOST / postShare.host' },
+    ];
+    for (const item of perServerHosts) {
+        const value = String(item.value || '').trim();
+        if (value && !isValidHost(value)) {
+            addIssue(
+                'error',
+                'HOST_INVALID',
+                `${item.label} がホスト名またはIPアドレスとして無効です: ${value}`,
+                'ホスト名、IPv4、IPv6 のいずれかを設定するか、未設定にしてメインサーバーと同じホストで待ち受けてください。',
+            );
+        }
     }
 
     const apiEndpoint = String(
@@ -270,12 +320,17 @@ function inspect() {
     const userFilesPort = userFilesPortValue === '' || userFilesPortValue === null
         ? null
         : Number(userFilesPortValue);
-    if (userFilesEndpoint && (!userFilesEndpoint.startsWith('/') || /[?#]/.test(userFilesEndpoint))) {
+    // config.js と同じく、先頭が / のパスか、外部配信のための HTTP(S) URL を許可する。
+    const userFilesEndpointValid = !userFilesEndpoint || (
+        (userFilesEndpoint.startsWith('/') || isHttpUrl(userFilesEndpoint)) &&
+        !/[?#]/.test(userFilesEndpoint)
+    );
+    if (!userFilesEndpointValid) {
         addIssue(
             'error',
             'USER_FILES_ENDPOINT_INVALID',
-            `ユーザーファイルの公開パスが無効です: ${userFilesEndpoint}`,
-            'NYAITTER_USER_FILES_ENDPOINT または userFiles.endpoint に /uploads のような先頭が / のパスを設定してください。',
+            `ユーザーファイルの公開先が無効です: ${userFilesEndpoint}`,
+            'NYAITTER_USER_FILES_ENDPOINT または userFiles.endpoint に /uploads のような先頭が / のパスか、https://files.example.com のような外部URLを設定してください。',
         );
     }
     if (userFilesPort !== null && (!Number.isInteger(userFilesPort) || userFilesPort < 1 || userFilesPort > 65535)) {
@@ -437,17 +492,54 @@ function inspect() {
         if (!legacyKey) addIssue('warning', 'AUTOMOD_SETTINGS_INCOMPLETE', 'AutoModのプロバイダーが未設定です。', 'AI_PROVIDERSとAUTOMOD_AI_PROVIDERを設定してください。');
     }
 
-    if (isProduction) {
-        const publicUrl = setting('PUBLIC_URL', config, 'federation.publicUrl');
-        if (!isHttpUrl(publicUrl)) {
+    // 公開URLは「URLであること」を必須にする。host:port のような指定は受け付けない。
+    const publicUrlSettings = [
+        {
+            envNames: ['PUBLIC_URL'],
+            configPaths: ['federation.publicUrl'],
+            label: 'PUBLIC_URL / federation.publicUrl',
+            productionRequired: true,
+        },
+        {
+            envNames: ['NYAITTER_API_PUBLIC_URL', 'NYAITTER_API_URL', 'API_PUBLIC_URL'],
+            configPaths: ['server.publicUrl', 'server.publicApiUrl'],
+            label: 'API公開URL (server.publicUrl)',
+        },
+        {
+            envNames: ['NYAITTER_CLIENT_PUBLIC_URL', 'NYAITTER_CLIENT_URL', 'NYAITTER_PUBLIC_URL', 'CLIENT_PUBLIC_URL'],
+            configPaths: ['client.publicUrl'],
+            label: 'Client公開URL (client.publicUrl)',
+        },
+        {
+            envNames: ['POST_SHARE_URL'],
+            configPaths: ['postShareUrl'],
+            label: 'POST_SHARE_URL / postShareUrl',
+        },
+    ];
+    for (const item of publicUrlSettings) {
+        const value = String(firstSetting(item.envNames, config, item.configPaths, '') || '').trim();
+        if (!value) {
+            if (isProduction && item.productionRequired) {
+                addIssue(
+                    'error',
+                    'PUBLIC_URL_MISSING_OR_INVALID',
+                    '本番環境ですが、有効なPUBLIC_URLがありません。',
+                    'PUBLIC_URL または federation.publicUrl に公開HTTPS URLを設定してください。',
+                );
+            }
+            continue;
+        }
+        if (!isNormalizedHttpUrl(value)) {
             addIssue(
-                'error',
-                'PUBLIC_URL_MISSING_OR_INVALID',
-                '本番環境ですが、有効なPUBLIC_URLがありません。',
-                'PUBLIC_URL または federation.publicUrl に公開HTTPS URLを設定してください。',
+                isProduction ? 'error' : 'warning',
+                'PUBLIC_URL_INVALID',
+                `${item.label} が公開URLとして無効です: ${value}`,
+                'http:// または https:// で始まり、認証情報や空白を含まないURLを設定してください。host:port だけの指定はできません。',
             );
         }
+    }
 
+    if (isProduction) {
         if (databaseAdapter === 'memory' || databaseAdapter === 'inmemory') {
             addIssue(
                 'warning',
@@ -457,15 +549,27 @@ function inspect() {
             );
         }
 
-        const trustProxy = String(
-            setting('TRUST_PROXY', config, 'server.trustProxy', 'false'),
-        ).toLowerCase();
-        if (!['true', '1', 'yes', 'on'].includes(trustProxy)) {
+        const trustProxyRaw = String(
+            setting('TRUST_PROXY', config, 'server.trustProxy', ''),
+        ).trim().toLowerCase();
+        const trustProxyHops = String(
+            firstSetting(['NYAITTER_TRUST_PROXY_HOPS'], config, ['server.trustProxyHops'], ''),
+        ).trim();
+        const trustProxyEnabled = trustProxyRaw === 'true' || trustProxyHops !== '';
+        if (!trustProxyEnabled) {
             addIssue(
                 'warning',
                 'TRUST_PROXY_DISABLED',
                 '本番環境でTRUST_PROXYが無効です。リバースプロキシ配下ではIP・HTTPS判定が正しくない場合があります。',
-                '信頼できるリバースプロキシの背後で運用する場合だけ TRUST_PROXY=true を設定してください。',
+                '信頼できるリバースプロキシの背後で運用する場合だけ TRUST_PROXY=true、または NYAITTER_TRUST_PROXY_HOPS に信頼するホップ数を設定してください。',
+            );
+        }
+        if (trustProxyRaw !== '' && !['true', 'false'].includes(trustProxyRaw) && trustProxyHops === '') {
+            addIssue(
+                'warning',
+                'TRUST_PROXY_VALUE_IGNORED',
+                `TRUST_PROXY の値は実行時に無視されます: ${trustProxyRaw}`,
+                'TRUST_PROXY は true / false のみ有効です。ホップ数は NYAITTER_TRUST_PROXY_HOPS に設定してください。',
             );
         }
     }

@@ -1,5 +1,6 @@
 const { parseDuration, parseIntegerRange } = require('./utils/settingFormats');
 const { normalizeProviders } = require('./utils/aiSettings');
+const { resolveListenTarget, resolveOptionalHost } = require('./utils/listenAddress');
 
 const isProduction = (process.env.NODE_ENV || 'development') === 'production';
 
@@ -22,6 +23,20 @@ function envBoolean(name, fallback) {
   if (['false', '0', 'no', 'off'].includes(String(value).toLowerCase())) return false;
   console.warn(`[config] ${name} must be a boolean; using configured default.`);
   return Boolean(fallback);
+}
+
+/**
+ * 信頼するプロキシのホップ数・サブネット指定。
+ * 未設定なら null。数値はホップ数、それ以外は Express が解釈する文字列。
+ */
+function parseTrustProxyHops(value) {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const hops = Number(raw);
+  if (Number.isInteger(hops) && hops >= 0) return hops;
+  // 'loopback' や '10.0.0.0/8' など。
+  return raw;
 }
 
 function envNonNegativeInteger(name, fallback) {
@@ -235,6 +250,26 @@ const configuredUserFilesEndpoint = process.env.NYAITTER_USER_FILES_ENDPOINT !==
   ? process.env.NYAITTER_USER_FILES_ENDPOINT
   : get('userFiles.endpoint', undefined);
 
+// 待ち受けアドレス。`NYAITTER_BIND=0.0.0.0:3000` のような host:port 指定に対応する。
+// 未指定なら従来どおり全インターフェースで待ち受ける。
+const serverHostSetting = readSetting(['NYAITTER_HOST'], ['server.host'], '');
+const serverBindSetting = readSetting(['NYAITTER_BIND'], ['server.bind'], '');
+const serverListen = resolveListenTarget({
+  host: serverHostSetting,
+  bind: serverBindSetting,
+  port: parseInt(process.env.PORT, 10) || get('server.port', 3000),
+});
+
+// 個別サーバーのホスト。未設定ならメインサーバーと同じホストで待ち受ける。
+const userFilesHostSetting = readSetting(['NYAITTER_USER_FILES_HOST'], ['userFiles.host'], '');
+const postShareHostSetting = readSetting(
+  ['NYAITTER_POST_SHARE_HOST'],
+  ['postShare.host', 'posts.shareHost'],
+  '',
+);
+const userFilesListenHost = resolveOptionalHost(userFilesHostSetting, serverListen.host);
+const postShareListenHost = resolveOptionalHost(postShareHostSetting, serverListen.host);
+
 const config = {
   ai: {
     providers: aiProviderSettings(),
@@ -242,9 +277,24 @@ const config = {
     workDir: require('path').resolve(__dirname, readSetting(['AI_WORK_DIR'], ['ai.workDir'], 'data/ai/requests')),
   },
   server: {
-    port: parseInt(process.env.PORT, 10) || get('server.port', 3000),
+    port: serverListen.port,
+    // 待ち受け先。host 未設定なら全インターフェース。bind は host:port 形式の上書き。
+    host: String(serverHostSetting || '').trim(),
+    bind: String(serverBindSetting || '').trim(),
+    listenHost: serverListen.host,
     jsonBodyLimit: process.env.JSON_BODY_LIMIT || get('server.jsonBodyLimit', '2mb'),
-    trustProxy: process.env.TRUST_PROXY === 'true' || get('server.trustProxy', false),
+    // 後方互換: TRUST_PROXY は文字列 'true' または config.json の真偽値のみ。
+    // ホップ数・サブネットは NYAITTER_TRUST_PROXY_HOPS で指定する。
+    trustProxy: (() => {
+      const hops = parseTrustProxyHops(
+        process.env.NYAITTER_TRUST_PROXY_HOPS !== undefined
+          ? process.env.NYAITTER_TRUST_PROXY_HOPS
+          : get('server.trustProxyHops', null),
+      );
+      if (hops !== null) return hops;
+      // 旧実装と同じく真偽値として扱う（非ブール値でも truthy なら有効）。
+      return process.env.TRUST_PROXY === 'true' || Boolean(get('server.trustProxy', false));
+    })(),
     apiEndpoint,
     publicUrl: readSetting(
       ['NYAITTER_API_PUBLIC_URL', 'NYAITTER_API_URL', 'API_PUBLIC_URL'],
@@ -262,6 +312,9 @@ const config = {
         : configuredUserFilesEndpoint,
     ),
     port: configuredUserFilesPort,
+    // 専用ポートで配信するときの待ち受けホスト。未設定ならメインと同じ。
+    host: String(userFilesHostSetting || '').trim(),
+    listenHost: userFilesListenHost,
   },
 
   static: {
@@ -999,6 +1052,9 @@ const config = {
   },
 
   postSharePort: envNonNegativeInteger('POST_SHARE_PORT', get('postSharePort', get('posts.sharePort', 0))) || null,
+  // 投稿共有サーバーの待ち受けホスト。未設定ならメインと同じ。
+  postShareHost: String(postShareHostSetting || '').trim(),
+  postShareListenHost: postShareListenHost,
 
   // スペースの音声通話（WebRTC）。
   // ICE サーバーは TURN 認証情報付きのものを推奨。未指定の場合は公開 STUN のみを使う。
