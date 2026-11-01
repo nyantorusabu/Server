@@ -80,10 +80,6 @@ function normalizeUser(user) {
 	return {
 		...user,
 		block: normalizeBlockList(user.block, user.id),
-		note_rank: Number((user.note_rank ?? user.noteRank) ?? 0),
-		note_affirmative_score: Number((user.note_affirmative_score ?? user.noteAffirmativeScore) ?? 0),
-		note_max_per_day: Number((user.note_max_per_day ?? user.noteMaxPerDay) ?? 1),
-		note_min_public_threshold: Number((user.note_min_public_threshold ?? user.noteMinPublicThreshold) ?? 0),
 	};
 }
 
@@ -2584,6 +2580,16 @@ class D1Adapter extends DatabaseAdapter {
 			currentUserId: currentUserId == null ? null : requireId(currentUserId, 'currentUserId'),
 		}), { cacheSeconds: 0 });
 		return Array.isArray(res) ? res : [];
+	}
+
+	async listNotesByPostIds(postIds, currentUserId = null) {
+		const byPost = new Map();
+		const ids = [...new Set((postIds || []).map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))];
+		for (const postId of ids) {
+			const notes = await this.listNotesByPost(postId, currentUserId);
+			if (notes.length > 0) byPost.set(postId, notes);
+		}
+		return byPost;
 	}
 
 	async countNotesByUserSince(userId, since) {

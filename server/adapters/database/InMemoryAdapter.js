@@ -1220,10 +1220,6 @@ class InMemoryAdapter extends DatabaseAdapter {
 			shadow: false,
 			lock: false,
 			account_operation: null,
-			note_rank: 0,
-			note_affirmative_score: 0,
-			note_max_per_day: 1,
-			note_min_public_threshold: 0,
 			...(user || {}),
 		};
 		normalized.block = normalizeBlockList(normalized.block, normalized.id);
@@ -5737,6 +5733,16 @@ class InMemoryAdapter extends DatabaseAdapter {
 			const summary = this._getNoteRatingSummary(n.id, currentUserId);
 			return this._formatNote(n, summary, currentUserId);
 		});
+	}
+
+	async listNotesByPostIds(postIds, currentUserId = null) {
+		const byPost = new Map();
+		const ids = [...new Set((postIds || []).map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))];
+		for (const postId of ids) {
+			const notes = await this.listNotesByPost(postId, currentUserId);
+			if (notes.length > 0) byPost.set(postId, notes);
+		}
+		return byPost;
 	}
 
 	async countNotesByUserSince(userId, since) {

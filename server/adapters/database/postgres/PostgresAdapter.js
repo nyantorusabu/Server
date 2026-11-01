@@ -86,10 +86,6 @@ function normalizeUserRow(row) {
 		shadow: Boolean(row.shadow),
 		block: normalizeBlockList(rawBlock, id),
 		created_at: toIsoString(row.created_at),
-		note_rank: Number.isFinite(Number(row.note_rank)) ? Number(row.note_rank) : 0,
-		note_affirmative_score: Number.isFinite(Number(row.note_affirmative_score)) ? Number(row.note_affirmative_score) : 0,
-		note_max_per_day: Number.isFinite(Number(row.note_max_per_day)) ? Number(row.note_max_per_day) : 1,
-		note_min_public_threshold: Number.isFinite(Number(row.note_min_public_threshold)) ? Number(row.note_min_public_threshold) : 0,
 	};
 }
 
@@ -7611,6 +7607,40 @@ class PostgresAdapter extends DatabaseAdapter {
 			if (currentUserId != null && Number(rr.user_id) === Number(currentUserId)) entry.myRating = Boolean(rr.helpful);
 		}
 		return Promise.all(noteRows.map((r) => this._formatNote(r, byNote.get(Number(r.id)), tags, currentUserId)));
+	}
+
+	async listNotesByPostIds(postIds, currentUserId = null) {
+		const ids = [...new Set((postIds || []).map((id) => Number(id)).filter((id) => Number.isSafeInteger(id) && id > 0))];
+		const byPost = new Map();
+		if (ids.length === 0) return byPost;
+		const { rows: noteRows } = await this.pool.query(
+			'SELECT * FROM community_notes WHERE post_id = ANY($1::int[]) ORDER BY created_at DESC',
+			[ids],
+		);
+		if (noteRows.length === 0) return byPost;
+		const noteIds = noteRows.map((r) => Number(r.id));
+		const tags = await this._reasonTagsForNotes(noteIds);
+		const { rows: ratingRows } = await this.pool.query(
+			'SELECT note_id, helpful, user_id FROM note_ratings WHERE note_id = ANY($1::int[])',
+			[noteIds],
+		);
+		const byNote = new Map();
+		for (const id of noteIds) byNote.set(id, { helpfulCount: 0, totalRatingCount: 0, myRating: null });
+		for (const rr of ratingRows) {
+			const nid = Number(rr.note_id);
+			const entry = byNote.get(nid);
+			if (!entry) continue;
+			entry.totalRatingCount += 1;
+			if (rr.helpful === true) entry.helpfulCount += 1;
+			if (currentUserId != null && Number(rr.user_id) === Number(currentUserId)) entry.myRating = Boolean(rr.helpful);
+		}
+		const formatted = await Promise.all(noteRows.map((r) => this._formatNote(r, byNote.get(Number(r.id)), tags, currentUserId)));
+		for (let i = 0; i < noteRows.length; i += 1) {
+			const pid = Number(noteRows[i].post_id);
+			if (!byPost.has(pid)) byPost.set(pid, []);
+			byPost.get(pid).push(formatted[i]);
+		}
+		return byPost;
 	}
 
 	async countNotesByUserSince(userId, since) {
