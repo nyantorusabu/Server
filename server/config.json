@@ -11,7 +11,8 @@
 		"maxConcurrent": 10
 	},
 	"autoMod": {
-		"maxConcurrent": 10
+		"maxConcurrent": 10,
+		"reasoningEffort": "none"
 	},
 	"reputation": {
 		"featureAccess": {},
