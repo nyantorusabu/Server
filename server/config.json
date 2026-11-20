@@ -6,6 +6,9 @@
 			{"id": "tokenharbor", "type": "openai", "url": "https://tokenharbor.ai/v1", "apikey": "thk_live_J9vr1awjJKfw51X1bNjZdbvSpkqPkR_gbd9oyfLfm7mrvHdFSMCIp657ImyQfyKM", "defmodel": "deepseek-v4-flash"}
 		]
 	},
+	"translation": {
+		"reasoningEffort": "none"
+	},
 	"reputation": {
 		"featureAccess": {},
 		"notes": {
