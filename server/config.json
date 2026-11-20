@@ -2,8 +2,7 @@
 	"ai": {
 		"providers": [
 			{"id": "logfare", "type": "openai", "url": "https://logfare.ai/v1", "apikey": "lfu_nCC6r1WgmQOLvCxFedcXLVXiXnVXz57n", "defmodel": "auto"},
-			{"id": "logfare-sub", "type": "openai", "url": "https://logfare.ai/v1", "apikey": "lfu_ywNuymmBV7pkFZDl5HsDPp6uWGUIzYi5", "defmodel": "auto"},
-			{"id": "tokenharbor", "type": "openai", "url": "https://tokenharbor.ai/v1", "apikey": "thk_live_J9vr1awjJKfw51X1bNjZdbvSpkqPkR_gbd9oyfLfm7mrvHdFSMCIp657ImyQfyKM", "defmodel": "deepseek-v4-flash"}
+			{"id": "logfare-sub", "type": "openai", "url": "https://logfare.ai/v1", "apikey": "lfu_ywNuymmBV7pkFZDl5HsDPp6uWGUIzYi5", "defmodel": "auto"}
 		]
 	},
 	"translation": {
