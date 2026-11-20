@@ -37,7 +37,7 @@
     "server/check-config.js": "3f922078d29b1178b947f315d6b8cc8c15d67db91cf4a5749d1f6d410cfac937",
     "server/cli.js": "df56ec1358f0144d39c59e6363a5c14c17086fd738e44212bda72d803d7ea47d",
     "server/config.js": "75b6aeced769cb4b815777a280f4bb5243c3153591d2c54c84e700bf29760846",
-    "server/config.json": "657950394756f100c1bf029855be249bce656ed9567c2552c2ee0cf66478a71e",
+    "server/config.json": "102cff18eb70d39305e41a918c66da90c06623ee8889e051a630920c57b3eb80",
     "server/dev.js": "69b4eaccf25b2354477f5f0d5d4e8f3d57b37b61f636a96416352b09d1542292",
     "server/help/README.md": "cddf7a85bf891f00718403e1b412488d2d361542ec97f6622786b5cf5196c552",
     "server/help/adapters-overview.md": "7812a4b5388a9ac744f3737bcbeaf1faef80ace877af46b5dd62bdeb86b118ad",
